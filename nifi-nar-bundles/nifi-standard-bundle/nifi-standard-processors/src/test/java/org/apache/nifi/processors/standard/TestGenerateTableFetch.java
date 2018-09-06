@@ -48,6 +48,8 @@ import java.util.Map;
 
 import static org.apache.nifi.processors.standard.AbstractDatabaseFetchProcessor.DB_TYPE;
 import static org.apache.nifi.processors.standard.AbstractDatabaseFetchProcessor.REL_SUCCESS;
+import static org.apache.nifi.processors.standard.GenerateTableFetch.REL_ROW_COUNT;
+import static org.apache.nifi.processors.standard.GenerateTableFetch.REL_TABLE_EMPTY;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -113,6 +115,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(DB_TYPE, new DerbyDatabaseAdapter().getName());
     }
 
+    // This is the only test were we verified the ROW_COUNT and TABLE_EMPTY relationships
     @Test
     public void testAddedRows() throws ClassNotFoundException, SQLException, InitializationException, IOException {
 
@@ -136,21 +139,29 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "ID");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_ROW_COUNT, 1);
+        runner.assertTransferCount(REL_TABLE_EMPTY, 0);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
         ResultSet resultSet = stmt.executeQuery(query);
+
         // Should be three records
         assertTrue(resultSet.next());
         assertTrue(resultSet.next());
         assertTrue(resultSet.next());
         assertFalse(resultSet.next());
+
+        // Row count should be 3
+        runner.getFlowFilesForRelationship(REL_ROW_COUNT).get(0).assertAttributeEquals("rowCount", "3");
         runner.clearTransferState();
 
-        // Run again, this time no flowfiles/rows should be transferred
+        // Run again, this time no flowfiles/rows should be transferred to success
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_ROW_COUNT, 1);
+        runner.assertTransferCount(REL_TABLE_EMPTY, 1);
         runner.clearTransferState();
 
         // Add 3 new rows with a higher ID and run with a partition size of 2. Two flow files should be transferred
@@ -159,7 +170,9 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (5, 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_ROW_COUNT, 1);
+        runner.assertTransferCount(REL_TABLE_EMPTY, 0);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -184,7 +197,7 @@ public class TestGenerateTableFetch {
         // Add a new row with a higher ID and run, one flow file will be transferred
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (6, 'Mr. NiFi', 1.0, '2012-01-01 03:23:34.234')");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 5 AND ID <= 6 ORDER BY ID FETCH NEXT 2 ROWS ONLY", query);
@@ -199,7 +212,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "name");
         runner.setProperty(GenerateTableFetch.COLUMN_NAMES, "id, name, scale, created_on");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 4); // 7 records with partition size 2 means 4 generated FlowFiles
+        runner.assertTransferCount(REL_SUCCESS, 4); // 7 records with partition size 2 means 4 generated FlowFiles
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT id, name, scale, created_on FROM TEST_QUERY_DB_TABLE WHERE name <= 'Mr. NiFi' ORDER BY name FETCH NEXT 2 ROWS ONLY", new String(flowFile.toByteArray()));
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(1);
@@ -247,7 +260,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "ID");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -261,7 +274,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Create and populate a new table and re-run
@@ -273,7 +286,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.TABLE_NAME, "TEST_QUERY_DB_TABLE2");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE2 WHERE ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -291,7 +304,7 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE2 (id, name, scale, created_on) VALUES (5, 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -337,7 +350,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "ID");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -351,7 +364,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Add 3 new rows with a higher ID and run with a partition size of 2. Two flow files should be transferred
@@ -360,7 +373,7 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (5, 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -385,7 +398,7 @@ public class TestGenerateTableFetch {
         // Add a new row with a higher ID and run, one flow file will be transferred
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (6, 'Mr. NiFi', 1.0, '2012-01-01 03:23:34.234')");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 5 AND ID <= 6 ORDER BY ID FETCH NEXT 2 ROWS ONLY", query);
@@ -399,7 +412,7 @@ public class TestGenerateTableFetch {
         runner.getStateManager().clear(Scope.CLUSTER);
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "name");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 4); // 7 records with partition size 2 means 4 generated FlowFiles
+        runner.assertTransferCount(REL_SUCCESS, 4); // 7 records with partition size 2 means 4 generated FlowFiles
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE name <= 'Mr. NiFi' ORDER BY name FETCH NEXT 2 ROWS ONLY", new String(flowFile.toByteArray()));
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(1);
@@ -435,7 +448,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "created_on");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE created_on <= '2010-01-01 00:00:00.0' ORDER BY created_on FETCH NEXT 10000 ROWS ONLY", query);
@@ -449,7 +462,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Add 5 new rows, 3 with higher timestamps, 2 with a lower timestamp.
@@ -460,7 +473,7 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (7, 'James Johnson', 16.0, '2011-01-01 04:23:34.236')");
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -487,7 +500,7 @@ public class TestGenerateTableFetch {
         // Add a new row with a higher created_on and run, one flow file will be transferred
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (8, 'Mr. NiFi', 1.0, '2012-01-01 03:23:34.234')");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE created_on > '2011-01-01 04:23:34.236' AND created_on <= '2012-01-01 03:23:34.234' ORDER BY created_on FETCH NEXT 2 ROWS ONLY", query);
@@ -523,7 +536,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "0");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(GenerateTableFetch.REL_SUCCESS, 1);
+        runner.assertTransferCount(GenerateTableFetch.REL_SUCCESS, 1);
         runner.getFlowFilesForRelationship(GenerateTableFetch.REL_SUCCESS).get(0).assertContentEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID <= 2 ORDER BY ID");
         runner.clearTransferState();
     }
@@ -552,19 +565,19 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "1");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(GenerateTableFetch.REL_SUCCESS, 2);
+        runner.assertTransferCount(GenerateTableFetch.REL_SUCCESS, 2);
         runner.clearTransferState();
 
         // Add a new row in the same bucket
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, bucket) VALUES (2, 0)");
         runner.run();
-        runner.assertAllFlowFilesTransferred(GenerateTableFetch.REL_SUCCESS, 1);
+        runner.assertTransferCount(GenerateTableFetch.REL_SUCCESS, 1);
         runner.clearTransferState();
 
         // Add a new row in a new bucket
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, bucket) VALUES (3, 1)");
         runner.run();
-        runner.assertAllFlowFilesTransferred(GenerateTableFetch.REL_SUCCESS, 1);
+        runner.assertTransferCount(GenerateTableFetch.REL_SUCCESS, 1);
         runner.clearTransferState();
 
         // Add a new row in an old bucket, it should not be transferred
@@ -575,7 +588,7 @@ public class TestGenerateTableFetch {
         // Add a new row in the second bucket, only the new row should be transferred
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, bucket) VALUES (5, 1)");
         runner.run();
-        runner.assertAllFlowFilesTransferred(GenerateTableFetch.REL_SUCCESS, 1);
+        runner.assertTransferCount(GenerateTableFetch.REL_SUCCESS, 1);
         runner.clearTransferState();
     }
 
@@ -688,7 +701,7 @@ public class TestGenerateTableFetch {
 
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id > 0 AND id <= 1 ORDER BY id FETCH NEXT 10000 ROWS ONLY", new String(flowFile.toByteArray()));
     }
@@ -728,7 +741,7 @@ public class TestGenerateTableFetch {
 
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         // Note there is no WHERE clause here. Because we are using dynamic tables, the old state key/value is not retrieved
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id <= 1 ORDER BY id FETCH NEXT 10000 ROWS ONLY", new String(flowFile.toByteArray()));
@@ -748,7 +761,7 @@ public class TestGenerateTableFetch {
         }});
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id > 1 AND id <= 2 ORDER BY id FETCH NEXT 10000 ROWS ONLY", new String(flowFile.toByteArray()));
         assertEquals("TEST_QUERY_DB_TABLE", flowFile.getAttribute("generatetablefetch.tableName"));
@@ -793,7 +806,7 @@ public class TestGenerateTableFetch {
 
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         // Note there is no WHERE clause here. Because we are using dynamic tables, the old state key/value is not retrieved
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id <= 1 ORDER BY id FETCH NEXT 10000 ROWS ONLY", new String(flowFile.toByteArray()));
@@ -807,7 +820,7 @@ public class TestGenerateTableFetch {
         }});
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id > 1 AND id <= 2 ORDER BY id FETCH NEXT 10000 ROWS ONLY", new String(flowFile.toByteArray()));
     }
@@ -846,7 +859,7 @@ public class TestGenerateTableFetch {
 
         runner.run();
 
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         // Note there is no WHERE clause here. Because we are using dynamic tables (i.e. Expression Language,
         // even when not referring to flow file attributes), the old state key/value is not retrieved
@@ -887,7 +900,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, Integer.toString(partitionSize));
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, expectedFileCount);
+        runner.assertTransferCount(REL_SUCCESS, expectedFileCount);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE 1=1 ORDER BY ID FETCH NEXT 1000000 ROWS ONLY", query);
@@ -918,7 +931,7 @@ public class TestGenerateTableFetch {
         runner.setProperty("initial.maxvalue.ID", "1");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 1 AND ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -930,7 +943,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Add 3 new rows with a higher ID and run with a partition size of 2. Two flow files should be transferred
@@ -940,7 +953,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
         runner.setProperty("initial.maxvalue.ID", "5"); // This should have no effect as there is a max value in the processor state
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -988,7 +1001,7 @@ public class TestGenerateTableFetch {
         runner.setVariable("maxval.id", "1");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 1 AND ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -1000,7 +1013,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
     }
 
@@ -1031,7 +1044,7 @@ public class TestGenerateTableFetch {
         runner.setIncomingConnection(true);
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 1 AND ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -1044,7 +1057,7 @@ public class TestGenerateTableFetch {
         // Run again, this time no flowfiles/rows should be transferred
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
     }
 
@@ -1076,7 +1089,7 @@ public class TestGenerateTableFetch {
         runner.setIncomingConnection(true);
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 1 AND ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -1089,7 +1102,7 @@ public class TestGenerateTableFetch {
         // Run again, this time no flowfiles/rows should be transferred
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Initial Max Value for second table
@@ -1107,7 +1120,7 @@ public class TestGenerateTableFetch {
         attrs.put("table.name", "TEST_QUERY_DB_TABLE2");
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE2 WHERE ID > 1 AND ID <= 2 ORDER BY ID FETCH NEXT 10000 ROWS ONLY", query);
@@ -1120,7 +1133,7 @@ public class TestGenerateTableFetch {
         // Run again, this time no flowfiles/rows should be transferred
         runner.enqueue(new byte[0], attrs);
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
     }
 
@@ -1147,7 +1160,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "ID");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
 
@@ -1165,7 +1178,7 @@ public class TestGenerateTableFetch {
 
         // Run again
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
 
@@ -1205,7 +1218,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "ID");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE (type = 'male' OR type IS NULL)"
@@ -1219,7 +1232,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Add 3 new rows with a higher ID and run with a partition size of 2. Two flow files should be transferred
@@ -1228,7 +1241,7 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, type, name, scale, created_on) VALUES (5, 'male', 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "1");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -1254,7 +1267,7 @@ public class TestGenerateTableFetch {
         // Add a new row with a higher ID and run, one flow file will be transferred
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, type, name, scale, created_on) VALUES (6, 'male', 'Mr. NiFi', 1.0, '2012-01-01 03:23:34.234')");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE ID > 5 AND (type = 'male' OR type IS NULL)"
@@ -1270,7 +1283,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.MAX_VALUE_COLUMN_NAMES, "name");
         runner.setProperty(GenerateTableFetch.COLUMN_NAMES, "id, type, name, scale, created_on");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 5); // 5 records with partition size 1 means 5 generated FlowFiles
+        runner.assertTransferCount(REL_SUCCESS, 5); // 5 records with partition size 1 means 5 generated FlowFiles
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         assertEquals("SELECT id, type, name, scale, created_on FROM TEST_QUERY_DB_TABLE WHERE (type = 'male' OR type IS NULL)"
                 + " AND name <= 'Mr. NiFi' ORDER BY name FETCH NEXT 1 ROWS ONLY", new String(flowFile.toByteArray()));
@@ -1324,7 +1337,7 @@ public class TestGenerateTableFetch {
             put("maxValueCol", "id");
         }});
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id <= 1 ORDER BY id FETCH NEXT 10000 ROWS ONLY", query);
@@ -1345,7 +1358,7 @@ public class TestGenerateTableFetch {
 
         // It should re-cache column type
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         query = new String(flowFile.toByteArray());
         assertEquals("SELECT * FROM TEST_QUERY_DB_TABLE WHERE id > 1 AND id <= 2 ORDER BY id FETCH NEXT 10000 ROWS ONLY", query);
@@ -1386,7 +1399,7 @@ public class TestGenerateTableFetch {
             put("maxValueCol", "id");
         }});
         runner.run(2);
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
 
         assertEquals(2, processor.columnTypeMap.size());
         runner.clearTransferState();
@@ -1408,7 +1421,7 @@ public class TestGenerateTableFetch {
 
         // It should re-cache column type
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 1);
+        runner.assertTransferCount(REL_SUCCESS, 1);
         assertEquals(2, processor.columnTypeMap.size());
         runner.clearTransferState();
     }
@@ -1438,7 +1451,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
         // First flow file
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
@@ -1460,7 +1473,7 @@ public class TestGenerateTableFetch {
 
         // Run again, this time no flowfiles/rows should be transferred
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 0);
+        runner.assertTransferCount(REL_SUCCESS, 0);
         runner.clearTransferState();
 
         // Add 3 new rows with a higher ID and run with a partition size of 2. Three flow files should be transferred
@@ -1468,7 +1481,7 @@ public class TestGenerateTableFetch {
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (21, 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         stmt.execute("insert into TEST_QUERY_DB_TABLE (id, name, scale, created_on) VALUES (24, 'Marty Johnson', 15.0, '2011-01-01 03:23:34.234')");
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 3);
+        runner.assertTransferCount(REL_SUCCESS, 3);
 
         // Verify first flow file's contents
         flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
@@ -1523,7 +1536,7 @@ public class TestGenerateTableFetch {
         runner.setProperty(GenerateTableFetch.PARTITION_SIZE, "2");
 
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
         // First flow file
         MockFlowFile flowFile = runner.getFlowFilesForRelationship(REL_SUCCESS).get(0);
         String query = new String(flowFile.toByteArray());
@@ -1545,7 +1558,7 @@ public class TestGenerateTableFetch {
 
         // Run again, the same flowfiles should be transferred as we have no maximum-value column
         runner.run();
-        runner.assertAllFlowFilesTransferred(REL_SUCCESS, 2);
+        runner.assertTransferCount(REL_SUCCESS, 2);
         runner.clearTransferState();
     }
 

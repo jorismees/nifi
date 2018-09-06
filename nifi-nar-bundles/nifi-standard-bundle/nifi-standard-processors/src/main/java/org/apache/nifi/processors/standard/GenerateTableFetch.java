@@ -17,13 +17,8 @@
 package org.apache.nifi.processors.standard;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.nifi.annotation.behavior.DynamicProperty;
-import org.apache.nifi.annotation.behavior.InputRequirement;
+import org.apache.nifi.annotation.behavior.*;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
-import org.apache.nifi.annotation.behavior.Stateful;
-import org.apache.nifi.annotation.behavior.TriggerSerially;
-import org.apache.nifi.annotation.behavior.WritesAttribute;
-import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
@@ -50,21 +45,9 @@ import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.standard.db.DatabaseAdapter;
 
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.sql.Statement;
+import java.sql.*;
 import java.text.ParseException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -138,10 +121,22 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
                     + "If no incoming connection(s) are specified, this relationship is unused.")
             .build();
 
+    public static final Relationship REL_ROW_COUNT = new Relationship.Builder()
+            .name("rowCount")
+            .description("Flow file containing the rowcount of the input table")
+            .build();
+
+    public static final Relationship REL_TABLE_EMPTY = new Relationship.Builder()
+            .name("tableEmpty")
+            .description("Empty flowfile which can be used to process empty tables")
+            .build();
+
     public GenerateTableFetch() {
         final Set<Relationship> r = new HashSet<>();
         r.add(REL_SUCCESS);
         r.add(REL_FAILURE);
+        r.add(REL_ROW_COUNT);
+        r.add(REL_TABLE_EMPTY);
         relationships = Collections.unmodifiableSet(r);
 
         final List<PropertyDescriptor> pds = new ArrayList<>();
@@ -241,7 +236,6 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
         final StateManager stateManager = context.getStateManager();
         final StateMap stateMap;
         FlowFile finalFileToProcess = fileToProcess;
-
 
         try {
             stateMap = stateManager.getState(Scope.CLUSTER);
@@ -419,6 +413,7 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
                 }
 
                 // Generate SQL statements to read "pages" of data
+                String fragmentIdentifier = UUID.randomUUID().toString();
                 Long limit = partitionSize == 0 ? null : (long) partitionSize;
                 for (long i = 0; i < numberOfFetches; i++) {
                     // Add a right bounding for the partitioning column if necessary (only on last partition, meaning we don't need the limit)
@@ -450,7 +445,24 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
                     if (partitionSize != 0) {
                         sqlFlowFile = session.putAttribute(sqlFlowFile, "generatetablefetch.offset", String.valueOf(offset));
                     }
+
+                    // Add fragment indexes
+                    sqlFlowFile = session.putAttribute(sqlFlowFile, "fragment.identifier", fragmentIdentifier);
+                    sqlFlowFile = session.putAttribute(sqlFlowFile, "fragment.count", String.valueOf(numberOfFetches));
+                    sqlFlowFile = session.putAttribute(sqlFlowFile, "fragment.index", String.valueOf(i));
+
                     session.transfer(sqlFlowFile, REL_SUCCESS);
+                }
+
+                // Generate flowfile that contains the number of input rows
+                FlowFile rowCountFlowFile = session.create(fileToProcess);
+                session.putAttribute(rowCountFlowFile, "rowCount", Long.toString(rowCount));
+                session.transfer(rowCountFlowFile, REL_ROW_COUNT);
+
+                // Generate empty flowFile to TABLE_EMPTY relationship when table is empty
+                if (rowCount == 0) {
+                    FlowFile tableEmptyFlowFile = session.create(fileToProcess);
+                    session.transfer(tableEmptyFlowFile, REL_TABLE_EMPTY);
                 }
 
                 if (fileToProcess != null) {
